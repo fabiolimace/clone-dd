@@ -1,0 +1,400 @@
+#!/bin/bash
+#
+# Este script clona uma partição
+# 
+# Parâmetros:
+#  - Diretório de backup (lugar onde a imagem será guardada)
+#  - Nome da partição (sda1, sdb3 etc)
+#  - Identificador para a imagem (um nome para facilitar a identificacao)
+#
+# Para restaurar a imagem em uma partição:
+#
+#   sudo gzip -dc IMAGEM.dd.gz | sudo dd of=/dev/PARTICAO
+#   ou
+#   sudo 7z x -so IMAGEM.dd.7z | sudo dd of=/dev/PARTICAO
+#
+# Para mais detalhes, consultar o método "main"
+#
+# Data: 2018-11-09
+# Autor: fabiosl
+# Versao: 1.6.0
+#
+
+NOME_PARTICAO=""
+MOUNTPOINT_PARTICAO=""
+TIPO_PARTICAO=""
+TAMANHO_PARTICAO=""
+LABEL_PARTICAO=""
+IDENTIFICADOR_PARTICAO=""
+FERRAMENTA_COMPRESSAO=""
+FAZER_ZEROFILL=""
+FAZER_VERIFICACAO=""
+NOME_IMAGEM=""
+DIR_BACKUP=""
+SUFIXO=""
+
+CMD_LISTAR_PARTICOES="lsblk --noheadings --list --output='NAME,FSTYPE,SIZE,LABEL,MOUNTPOINT,TYPE' | sort | egrep 'part$'"
+CMD_OBTER_MOUNTPOINT='lsblk --noheadings --output="MOUNTPOINT"'
+CMD_OBTER_TIPO='lsblk --noheadings --output="FSTYPE"'
+CMD_OBTER_TAMANHO='lsblk --noheadings --output="SIZE"'
+CMD_OBTER_LABEL='lsblk --noheadings --output="LABEL"'
+
+function data {
+	date +'%Y-%m-%d %Hh%M'
+}
+
+function versao {
+	echo "v"$(data | tr ' ' '_')
+}
+
+function erro {
+	mensagem "A clonagem falhou!\nPor favor, verifique no log o que deu errado."
+	exit 0;
+}
+
+function mensagem {
+	
+	CMD_MENSAGEM="notify-send --urgency=normal \"Clonagem de Partição\"";
+	
+	if [ ! -z "$1" ];
+	then
+		MENSAGEM="$1";
+		bash -c "$CMD_MENSAGEM \"$MENSAGEM\"" ;
+	fi;
+}
+
+function listar_particoes {
+	echo "-----------------------------------"
+	echo "        LISTA DE PARTICOES         "
+	echo "-----------------------------------"
+	bash -c "$CMD_LISTAR_PARTICOES";
+	echo "-----------------------------------"
+}
+
+function perguntar_particao {
+
+	echo -n "Digite o nome da partição (sdXN): "
+	read NOME_PARTICAO
+
+	EXISTE_PARTICAO=$(bash -c "$CMD_LISTAR_PARTICOES | egrep ^$NOME_PARTICAO | egrep '[^ ]' | wc -l")
+
+	if [ ! "$EXISTE_PARTICAO" -eq "1" ];
+	then
+		echo "ERRO: Partição \"$NOME_PARTICAO\" não localizada."
+		erro;
+	fi;
+}
+
+function perguntar_diretorio {
+
+	DIR_PADRAO="$(pwd)"
+
+	echo -n "Digite o nome do diretório de backup (padrão: \"$DIR_PADRAO\"): "
+	read DIR_BACKUP
+
+	if [ -z "${DIR_BACKUP}" ];
+	then 
+		DIR_BACKUP=$DIR_PADRAO
+	fi;
+
+	DIR_BACKUP=$(dirname "$DIR_BACKUP")/$(basename "$DIR_BACKUP")
+
+	if [ ! -d "$DIR_BACKUP" ];
+	then
+		echo "ERRO: Diretório \"$DIR_BACKUP\" não localizado."
+		erro;
+	fi;
+}
+
+function perguntar_identificador {
+
+	IDENTIFICADOR_PADRAO="particao"
+
+	if [ ! -z "${LABEL_PARTICAO}" ];
+	then
+		IDENTIFICADOR_PADRAO="${LABEL_PARTICAO}"
+	fi;
+
+	echo -n "Digite identificador para a imagem (padrão: \"$IDENTIFICADOR_PADRAO\"): "
+	read IDENTIFICADOR_PARTICAO
+
+	if [ -z "${IDENTIFICADOR_PARTICAO}" ];
+	then 
+		IDENTIFICADOR_PARTICAO=$IDENTIFICADOR_PADRAO
+	fi;
+}
+
+function perguntar_compressao {
+
+	FERRAMENTA_COMPRESSAO_PADRAO="gz"
+
+	echo -n "Digite a modo de compressão [gz|7z] (padrão: \"$FERRAMENTA_COMPRESSAO_PADRAO\"): "
+	read FERRAMENTA_COMPRESSAO
+
+	if [ "${FERRAMENTA_COMPRESSAO}" != "7z" ];
+	then 
+    	FERRAMENTA_COMPRESSAO=$FERRAMENTA_COMPRESSAO_PADRAO
+	fi;
+}
+
+function perguntar_zerofill {
+
+	FAZER_ZEROFILL_PADRAO="nao"
+
+	echo -n "Deseja preencher o espaço livre com ZEROs [sim|nao]? (padrão: \"$FAZER_ZEROFILL_PADRAO\"): "
+	read FAZER_ZEROFILL
+
+	if [[ "${FAZER_ZEROFILL}" != "sim" ]];
+	then 
+		FAZER_ZEROFILL=$FAZER_ZEROFILL_PADRAO
+	fi;
+}
+
+function perguntar_verificacao {
+
+	FAZER_VERIFICACAO_PADRAO="sim"
+
+	echo -n "Deseja verificar a integridade [sim|nao]? (padrão: \"$FAZER_VERIFICACAO_PADRAO\"): "
+	read FAZER_VERIFICACAO
+
+	if [[ "${FAZER_VERIFICACAO}" != "nao" ]];
+	then 
+		FAZER_VERIFICACAO=$FAZER_VERIFICACAO_PADRAO
+	fi;
+}
+
+function listar_opcoes_selecionadas {
+
+	echo "Opções selecionadas:";
+	echo "- Diretório de backup: \"$DIR_BACKUP\"";
+	echo "- Partição selecionada: \"$NOME_PARTICAO\"";
+	echo "- Identificador da imagem: \"$IDENTIFICADOR_PARTICAO\"";
+	echo "- Modo de compressão: \"$FERRAMENTA_COMPRESSAO\"";
+	echo "- Preencher espaço livre: \"$FAZER_ZEROFILL\"";
+	echo "- Verificar integridade: \"$FAZER_VERIFICACAO\"";
+	echo "- Informações da partição"
+	echo "  * Tipo do sistema de arquivos: \"$TIPO_PARTICAO\"";
+	echo "  * Tamanho do sistema de arquivos: \"$TAMANHO_PARTICAO\"";
+	echo "  * Label do sistema de arquivos: \"$LABEL_PARTICAO\"";
+}
+
+function perguntar_confirmacao {
+	echo -n "Aperte [ENTER] se quiser continuar ou [CTRL]+[C] se quiser cancelar."
+	read -n 1
+}
+
+function obter_mountpoint {
+
+	MOUNTPOINT_PARTICAO=$(bash -c "$CMD_OBTER_MOUNTPOINT /dev/$NOME_PARTICAO" | egrep "[^ ]")
+	EXISTE_MOUNTPOINT=$(echo "$MOUNTPOINT_PARTICAO" | egrep "[^ ]" | wc -l)
+}
+
+function obter_tipo {
+
+	TIPO_PARTICAO=$(bash -c "$CMD_OBTER_TIPO /dev/$NOME_PARTICAO" | egrep "[^ ]")
+	EXISTE_TIPO=$(echo "$TIPO_PARTICAO" | egrep "[^ ]" | wc -l)
+
+	if [ ! "$EXISTE_TIPO" -eq "1" ];
+	then
+		echo "ERRO: Tipo de partição não identificado para \"$NOME_PARTICAO\"."
+		erro;
+	fi;
+}
+
+function obter_tamanho {
+
+	TAMANHO_PARTICAO=$(bash -c "$CMD_OBTER_TAMANHO /dev/$NOME_PARTICAO" | tr ',' '.'  | egrep "[^ ]")
+	EXISTE_TAMANHO=$(echo "$TAMANHO_PARTICAO" | egrep "[^ ]" | wc -l)
+
+	if [ ! "$EXISTE_TAMANHO" -eq "1" ];
+	then
+		echo "ERRO: Tamanho da partição não identificado para \"$NOME_PARTICAO\"."
+		erro;
+	fi;
+}
+
+function obter_label {
+
+	LABEL_PARTICAO=$(bash -c "$CMD_OBTER_LABEL /dev/$NOME_PARTICAO" | egrep "[^ ]")
+	EXISTE_LABEL=$(echo "$LABEL_PARTICAO" | egrep "[^ ]" | wc -l)
+}
+
+function montar_particao {
+
+	PARTICAO_MONTADA=$(bash -c "$CMD_OBTER_MOUNTPOINT /dev/$NOME_PARTICAO" | egrep "[^ ]" | wc -l)
+	CMD_MONTAR="mount -t ${TIPO_PARTICAO} \"/dev/${NOME_PARTICAO}\" \"/mnt/${NOME_PARTICAO}\""
+
+	if [ "$PARTICAO_MONTADA" -eq "1" ];
+	then
+		MOUNTPOINT_PARTICAO=$(bash -c "$CMD_OBTER_MOUNTPOINT /dev/$NOME_PARTICAO");
+		return;
+	fi;
+	
+	if [ ! -d "/mnt/${NOME_PARTICAO}" ];
+	then
+		mkdir "/mnt/${NOME_PARTICAO}"
+	fi;
+	
+	echo "$CMD_MONTAR";
+	bash -c "$CMD_MONTAR";
+
+	PARTICAO_MONTADA=$(bash -c "$CMD_OBTER_MOUNTPOINT /dev/$NOME_PARTICAO" | egrep "[^ ]" | wc -l)
+
+	if [ "$PARTICAO_MONTADA" -eq "1" ];
+	then
+		MOUNTPOINT_PARTICAO="/mnt/${NOME_PARTICAO}"
+	else
+		echo "ERRO: Não foi possível montar a partição \"$NOME_PARTICAO\". Favor, monte-a manualmente e tente mais uma vez."
+		erro;
+	fi;
+}
+
+function desmontar_particao {
+	CMD_UMOUNT="umount /dev/$NOME_PARTICAO"
+	echo "$CMD_UMOUNT"
+	bash -c "$CMD_UMOUNT"
+}
+
+function fazer_zerofill {
+	
+	if [[ "${FAZER_ZEROFILL}" == "nao" ]];
+	then
+	    return;
+	fi;
+	
+    mensagem "Preparando a partição.\nO espaço não utilizado será preenchido com ZEROS para otimizar o tamanho final da imagem."
+	    
+    if [ -d "$MOUNTPOINT_PARTICAO" ]
+    then
+	    CMD_GERAR="cat /dev/zero > '$MOUNTPOINT_PARTICAO/zero.dat'"
+	    CMD_REMOVER="rm -fv '$MOUNTPOINT_PARTICAO/zero.dat'"
+	    CMD_PROGRESSO="xterm -e \"watch -n 1 'df --block-size=MB \"$MOUNTPOINT_PARTICAO\"'\" &"
+	    
+	    echo "$CMD_PROGRESSO"
+	    bash -c "$CMD_PROGRESSO"
+	    echo "$CMD_GERAR";
+	    bash -c "$CMD_GERAR";
+	    echo "$CMD_REMOVER";
+	    bash -c "$CMD_REMOVER";
+	    
+	    killall -9 xterm;
+    fi;
+}
+
+function gerar_imagem {
+	
+	mensagem "Iniciada a geração da imagem.\nIsso poderá demorar vários minutos."
+	
+	SUFIXO=".dd.${FERRAMENTA_COMPRESSAO}";
+		
+	NOME_IMAGEM=$(echo "$IDENTIFICADOR_PARTICAO $(echo $NOME_PARTICAO | tr '/' '_') $TIPO_PARTICAO $TAMANHO_PARTICAO $(versao)" | tr -s ' ' '_')
+	
+	CMD_BACKUP="dd if=\"/dev/$NOME_PARTICAO\" | gzip -v > \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\""
+	
+	if [[ ${FERRAMENTA_COMPRESSAO} == "7z" ]];
+	then
+	    CMD_BACKUP="dd if=\"/dev/$NOME_PARTICAO\" | 7z a -si \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\""
+	fi;
+	
+	CMD_PROGRESSO="xterm -e 'watch -n 30 killall -USR1 dd' &"
+
+	echo "$CMD_PROGRESSO"
+	bash -c "$CMD_PROGRESSO"
+	
+	echo "$CMD_BACKUP"
+	bash -c "$CMD_BACKUP"
+	
+	killall -9 xterm;
+}
+
+function verificar_integridade {
+	
+	if [[ "${FAZER_VERIFICACAO}" == "nao" ]];
+	then
+	    return;
+	fi;
+	
+	SUFIXO=".dd.${FERRAMENTA_COMPRESSAO}";
+		
+	mensagem "Iniciada a verificação de integridade.\nIsso também poderá demorar vários minutos."
+	
+	CMD_MD5_IMAGEM="gzip --suffix=$SUFIXO -v -dc \"${DIR_BACKUP}/${NOME_IMAGEM}\" | md5sum"
+	
+	if [[ ${FERRAMENTA_COMPRESSAO} == "7z" ]];
+	then
+		CMD_MD5_IMAGEM="7z x -so \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\" | md5sum"
+	fi;
+	
+	CMD_MD5_PARTICAO="md5sum /dev/$NOME_PARTICAO"
+	
+	echo "$CMD_MD5_PARTICAO"
+	MD5_PARTICAO=$(bash -c "$CMD_MD5_PARTICAO | cut -d' ' -f1 ")
+	echo "MD5 da partição: $MD5_PARTICAO"
+	
+	echo "$CMD_MD5_IMAGEM"
+	MD5_IMAGEM=$(bash -c "$CMD_MD5_IMAGEM | cut -d' ' -f1 ")
+	echo "MD5 da imagem gerada: $MD5_IMAGEM"
+
+	if [ -n "${MD5_PARTICAO}" -a "${MD5_PARTICAO}" == "${MD5_IMAGEM}" ];
+	then
+		CMD_SALVAR_MD5="echo ${MD5_PARTICAO} > \"${DIR_BACKUP}/${NOME_IMAGEM}.md5\""
+		echo "$CMD_SALVAR_MD5"
+		bash -c "$CMD_SALVAR_MD5" && echo "SUCESSO na verificação de integridade!";
+	else
+		CMD_REMOVER_IMAGEM="rm -fv \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\""
+		echo "$CMD_REMOVER_IMAGEM"
+		bash -c "$CMD_REMOVER_IMAGEM"
+		echo "ERRO: o MD5 da imagem gerado está incorreto."
+		erro;
+	fi;
+}
+
+function instrucoes_restauracao {
+
+    if [[ "${FERRAMENTA_COMPRESSAO}" == "7z" ]];
+    then
+        CMD_RESTAURAR="sudo 7z x -so \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\" | sudo dd of=/dev/$NOME_PARTICAO"
+    else
+        CMD_RESTAURAR="sudo gzip --suffix=$SUFIXO -v -dc \"${DIR_BACKUP}/${NOME_IMAGEM}\" | sudo dd of=/dev/$NOME_PARTICAO"
+    fi;
+    
+    echo
+    echo "-----------------------"
+    echo "COMANDO PARA RESTAURAR" >> ${DIR_BACKUP}/${NOME_IMAGEM}.txt
+    echo "-----------------------"
+    echo "Confira e faça backup antes de executar" >> ${DIR_BACKUP}/${NOME_IMAGEM}.txt
+    echo "${CMD_RESTAURAR}" >> ${DIR_BACKUP}/${NOME_IMAGEM}.txt
+    cat ${DIR_BACKUP}/${NOME_IMAGEM}.txt
+    echo "-----------------------"
+    echo
+}
+
+function main {
+
+	listar_particoes;
+	perguntar_diretorio;
+	perguntar_particao;
+	perguntar_compressao;
+	perguntar_zerofill;
+	perguntar_verificacao;
+	obter_mountpoint;
+	obter_tipo;
+	obter_tamanho;
+	obter_label;
+	perguntar_identificador;
+	listar_opcoes_selecionadas;
+	perguntar_confirmacao;
+	
+	echo "Início: $(data)"
+	montar_particao;
+	fazer_zerofill;
+	desmontar_particao;
+	gerar_imagem;
+	verificar_integridade;
+	instrucoes_restauracao;
+	echo "Fim: $(data)"
+	mensagem "Clonagem finalizada!"
+}
+
+time main;
+

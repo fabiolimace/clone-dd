@@ -1,0 +1,287 @@
+#!/bin/bash
+#
+# Este script clona um disco completo
+# 
+# Parâmetros:
+#  - Diretório de backup (lugar onde a imagem será guardada)
+#  - Nome do disco (sda, sdb etc)
+#  - Identificador para a imagem (um nome para facilitar a identificacao)
+#
+# Para restaurar a imagem em um disco:
+#
+#   sudo gzip -dc IMAGEM.dd.gz | sudo dd of=/dev/DISCO
+#   ou
+#   sudo 7z x -so IMAGEM.dd.7z | sudo dd of=/dev/DISCO
+#
+# Para mais detalhes, consultar o método "main"
+#
+# Data: 2018-11-09
+# Autor: fabiosl
+# Versao: 1.6.0
+#
+
+NOME_DISCO=""
+TAMANHO_DISCO=""
+LABEL_DISCO=""
+IDENTIFICADOR_DISCO=""
+NOME_IMAGEM=""
+DIR_BACKUP=""
+SUFIXO=""
+
+CMD_LISTAR_DISCOS="lsblk --noheadings --list --output='NAME,SIZE,TYPE' | sort | egrep 'disk$'"
+CMD_OBTER_TAMANHO='lsblk --noheadings --output="NAME,SIZE"'
+
+function data {
+	date +'%Y-%m-%d %Hh%M'
+}
+
+function versao {
+	echo "v"$(data | tr ' ' '_')
+}
+
+function erro {
+	mensagem "A clonagem falhou!\nPor favor, verifique no log o que deu errado."
+	exit 0;
+}
+
+function mensagem {
+	
+	CMD_MENSAGEM="notify-send --urgency=normal \"Clonagem de Disco\"";
+	
+	if [ ! -z "$1" ];
+	then
+		MENSAGEM="$1";
+		bash -c "$CMD_MENSAGEM \"$MENSAGEM\"" ;
+	fi;
+}
+
+function listar_discos {
+	echo "-----------------------------------"
+	echo "        LISTA DE DISCOS            "
+	echo "-----------------------------------"
+	bash -c "$CMD_LISTAR_DISCOS";
+	echo "-----------------------------------"
+}
+
+function perguntar_disco {
+
+	echo -n "Digite o nome do disco (sdX): "
+	read NOME_DISCO
+
+	EXISTE_DISCO=$(bash -c "$CMD_LISTAR_DISCOS | egrep ^$NOME_DISCO | egrep '[^ ]' | wc -l")
+
+	if [ "$EXISTE_DISCO" -eq "1" ];
+	then
+		echo "Disco selecionado: \"$NOME_DISCO\"";
+	else
+		echo "ERRO: Disco \"$NOME_DISCO\" não localizado."
+		erro;
+	fi;
+}
+
+
+function perguntar_diretorio {
+
+	DIR_PADRAO="$(pwd)"
+
+	echo -n "Digite o nome do diretório de backup (padrão: \"$DIR_PADRAO\"): "
+	read DIR_BACKUP
+
+	if [ -z "${DIR_BACKUP}" ];
+	then 
+		DIR_BACKUP=$DIR_PADRAO
+	fi;
+
+	DIR_BACKUP=$(dirname "$DIR_BACKUP")/$(basename "$DIR_BACKUP")
+
+	if [ ! -d "$DIR_BACKUP" ];
+	then
+		echo "ERRO: Diretório \"$DIR_BACKUP\" não localizado."
+		erro;
+	fi;
+}
+
+function perguntar_identificador {
+
+	IDENTIFICADOR_PADRAO="disco"
+
+	if [ ! -z "${LABEL_DISCO}" ];
+	then
+		IDENTIFICADOR_PADRAO="${LABEL_DISCO}"
+	fi;
+
+	echo -n "Digite identificador para a imagem (padrão: \"$IDENTIFICADOR_PADRAO\"): "
+	read IDENTIFICADOR_DISCO
+
+	if [ -z "${IDENTIFICADOR_DISCO}" ];
+	then 
+		IDENTIFICADOR_DISCO=$IDENTIFICADOR_PADRAO
+	fi;
+
+	echo "Identificador da imagem: \"$IDENTIFICADOR_DISCO\"";
+
+}
+
+function perguntar_compressao {
+
+	FERRAMENTA_COMPRESSAO_PADRAO="gz"
+
+	echo -n "Digite a modo de compressão [gz|7z] (padrão: \"$FERRAMENTA_COMPRESSAO_PADRAO\"): "
+	read FERRAMENTA_COMPRESSAO
+
+	if [ "${FERRAMENTA_COMPRESSAO}" != "7z" ];
+	then 
+    	FERRAMENTA_COMPRESSAO=$FERRAMENTA_COMPRESSAO_PADRAO
+	fi;
+}
+
+function perguntar_verificacao {
+
+	FAZER_VERIFICACAO_PADRAO="sim"
+
+	echo -n "Deseja verificar a integridade [sim|nao]? (padrão: \"$FAZER_VERIFICACAO_PADRAO\"): "
+	read FAZER_VERIFICACAO
+
+	if [[ "${FAZER_VERIFICACAO}" != "nao" ]];
+	then 
+		FAZER_VERIFICACAO=$FAZER_VERIFICACAO_PADRAO
+	fi;
+}
+
+function listar_opcoes_selecionadas {
+
+	echo "Opções selecionadas:";
+	echo "- Diretório de backup: \"$DIR_BACKUP\"";
+	echo "- Disco selecionado: \"$NOME_DISCO\"";
+	echo "- Identificador da imagem: \"$IDENTIFICADOR_DISCO\"";
+	echo "- Modo de compressão: \"$FERRAMENTA_COMPRESSAO\"";
+	echo "- Verificar integridade: \"$FAZER_VERIFICACAO\"";
+	echo "- Informações do disco"
+	echo "  * Tamanho do disco: \"$TAMANHO_DISCO\"";
+}
+
+function perguntar_confirmacao {
+	echo -n "Aperte [ENTER] se quiser continuar ou [CTRL]+[C] se quiser cancelar."
+	read -n 1
+}
+
+function obter_tamanho {
+
+	TAMANHO_DISCO=$(bash -c "$CMD_OBTER_TAMANHO /dev/$NOME_DISCO" | grep "^$NOME_DISCO" | tr ',' '.'  | egrep "[^ ]" | sed 's/^.* //')
+	EXISTE_TAMANHO=$(echo "$TAMANHO_DISCO" | egrep "[^ ]" | wc -l)
+
+	if [ ! "$EXISTE_TAMANHO" -eq "1" ];
+	then
+		echo "ERRO: Tamanho do disco não identificado para \"$NOME_DISCO\"."
+		erro;
+	fi;
+}
+
+function gerar_imagem {
+	
+	mensagem "Iniciada a geração da imagem.\nIsso poderá demorar vários minutos."
+	
+	SUFIXO=".dd.${FERRAMENTA_COMPRESSAO}";
+		
+	NOME_IMAGEM=$(echo "$IDENTIFICADOR_DISCO $(echo $NOME_DISCO | tr '/' '_') $TAMANHO_DISCO $(versao)" | tr -s ' ' '_')
+	
+	CMD_BACKUP="dd if=\"/dev/$NOME_DISCO\" | gzip -v > \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\""
+	
+	if [[ ${FERRAMENTA_COMPRESSAO} == "7z" ]];
+	then
+	    CMD_BACKUP="dd if=\"/dev/$NOME_DISCO\" | 7z a -si \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\""
+	fi;
+	
+	CMD_PROGRESSO="xterm -e 'watch -n 30 killall -USR1 dd' &"
+
+	echo "$CMD_PROGRESSO"
+	bash -c "$CMD_PROGRESSO"
+	
+	echo "$CMD_BACKUP"
+	bash -c "$CMD_BACKUP"
+	
+	killall -9 xterm;
+}
+
+function verificar_integridade {
+	
+	if [[ "${FAZER_VERIFICACAO}" == "nao" ]];
+	then
+	    return;
+	fi;
+	
+	SUFIXO=".dd.${FERRAMENTA_COMPRESSAO}";
+		
+	mensagem "Iniciada a verificação de integridade.\nIsso também poderá demorar vários minutos."
+	
+	CMD_MD5_IMAGEM="gzip --suffix=$SUFIXO -v -dc \"${DIR_BACKUP}/${NOME_IMAGEM}\" | md5sum"
+	
+	if [[ ${FERRAMENTA_COMPRESSAO} == "7z" ]];
+	then
+		CMD_MD5_IMAGEM="7z x -so \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\" | md5sum"
+	fi;
+	
+	CMD_MD5_DISCO="md5sum /dev/$NOME_DISCO"
+	
+	echo "$CMD_MD5_DISCO"
+	MD5_DISCO=$(bash -c "$CMD_MD5_DISCO | cut -d' ' -f1 ")
+	echo "MD5 do disco: $MD5_DISCO"
+	
+	echo "$CMD_MD5_IMAGEM"
+	MD5_IMAGEM=$(bash -c "$CMD_MD5_IMAGEM | cut -d' ' -f1 ")
+	echo "MD5 da imagem gerada: $MD5_IMAGEM"
+
+	if [ -n "${MD5_DISCO}" -a "${MD5_DISCO}" == "${MD5_IMAGEM}" ];
+	then
+		CMD_SALVAR_MD5="echo ${MD5_DISCO} > \"${DIR_BACKUP}/${NOME_IMAGEM}.md5\""
+		echo "$CMD_SALVAR_MD5"
+		bash -c "$CMD_SALVAR_MD5" && echo "SUCESSO na verificação de integridade!";
+	else
+		CMD_REMOVER_IMAGEM="rm -fv \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\""
+		echo "$CMD_REMOVER_IMAGEM"
+		bash -c "$CMD_REMOVER_IMAGEM"
+		echo "ERRO: o MD5 da imagem gerado está incorreto."
+		erro;
+	fi;
+}
+
+function instrucoes_restauracao {
+
+    if [[ "${FERRAMENTA_COMPRESSAO}" == "7z" ]];
+    then
+        CMD_RESTAURAR="sudo 7z x -so \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\" | sudo dd of=/dev/$NOME_DISCO"
+    else
+        CMD_RESTAURAR="sudo gzip --suffix=$SUFIXO -v -dc \"${DIR_BACKUP}/${NOME_IMAGEM}\" | sudo dd of=/dev/$NOME_DISCO"
+    fi;
+    
+    echo
+    echo "-----------------------"
+    echo "COMANDO PARA RESTAURAR" >> ${DIR_BACKUP}/${NOME_IMAGEM}.txt
+    echo "Confira e faça backup antes de executar" >> ${DIR_BACKUP}/${NOME_IMAGEM}.txt
+    echo "${CMD_RESTAURAR}" >> ${DIR_BACKUP}/${NOME_IMAGEM}.txt
+    cat ${DIR_BACKUP}/${NOME_IMAGEM}.txt
+    echo "-----------------------"
+    echo
+}
+
+function main {
+	listar_discos;
+	perguntar_diretorio;
+	perguntar_disco;
+	perguntar_compressao;
+	perguntar_verificacao;
+	obter_tamanho;
+	perguntar_identificador;
+	listar_opcoes_selecionadas
+	perguntar_confirmacao;
+	echo "Início: $(data)"
+	gerar_imagem;
+	verificar_integridade;
+	instrucoes_restauracao;
+	instrucoes_restauracao;
+	echo "Fim: $(data)"
+	mensagem "Clonagem finalizada!"
+}
+
+time main;
+
