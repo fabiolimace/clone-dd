@@ -278,7 +278,6 @@ function main {
 	gerar_imagem;
 	verificar_integridade;
 	instrucoes_restauracao;
-	instrucoes_restauracao;
 	echo "Fim: $(data)"
 	mensagem "Clonagem finalizada!"
 }
