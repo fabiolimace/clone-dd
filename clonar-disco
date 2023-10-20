@@ -46,11 +46,12 @@ function erro {
 
 function mensagem {
 	
-	CMD_MENSAGEM="notify-send --urgency=normal \"Clonagem de Disco\"";
+	CMD_MENSAGEM="which notify-send > /dev/null && notify-send --urgency=normal \"Clonagem de Disco\"";
 	
 	if [ ! -z "$1" ];
 	then
 		MENSAGEM="$1";
+		echo -e "\"$MENSAGEM\"" ;
 		bash -c "$CMD_MENSAGEM \"$MENSAGEM\"" ;
 	fi;
 }
@@ -185,7 +186,7 @@ function gerar_imagem {
 		
 	NOME_IMAGEM=$(echo "$IDENTIFICADOR_DISCO $(echo $NOME_DISCO | tr '/' '_') $TAMANHO_DISCO $(versao)" | tr -s ' ' '_')
 	
-	CMD_BACKUP="dd if=\"/dev/$NOME_DISCO\" | gzip -v > \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\""
+	CMD_BACKUP="dd if=\"/dev/$NOME_DISCO\" | gzip > \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\""
 	
 	if [[ ${FERRAMENTA_COMPRESSAO} == "7z" ]];
 	then
@@ -214,7 +215,7 @@ function verificar_integridade {
 		
 	mensagem "Iniciada a verificação de integridade.\nIsso também poderá demorar vários minutos."
 	
-	CMD_MD5_IMAGEM="gzip --suffix=$SUFIXO -v -dc \"${DIR_BACKUP}/${NOME_IMAGEM}\" | md5sum"
+	CMD_MD5_IMAGEM="gzip --suffix=$SUFIXO -dc \"${DIR_BACKUP}/${NOME_IMAGEM}\" | md5sum"
 	
 	if [[ ${FERRAMENTA_COMPRESSAO} == "7z" ]];
 	then
@@ -251,7 +252,7 @@ function instrucoes_restauracao {
     then
         CMD_RESTAURAR="sudo 7z x -so \"${DIR_BACKUP}/${NOME_IMAGEM}${SUFIXO}\" | sudo dd of=/dev/$NOME_DISCO"
     else
-        CMD_RESTAURAR="sudo gzip --suffix=$SUFIXO -v -dc \"${DIR_BACKUP}/${NOME_IMAGEM}\" | sudo dd of=/dev/$NOME_DISCO"
+        CMD_RESTAURAR="sudo gzip --suffix=$SUFIXO -dc \"${DIR_BACKUP}/${NOME_IMAGEM}\" | sudo dd of=/dev/$NOME_DISCO"
     fi;
     
     echo
@@ -283,4 +284,3 @@ function main {
 }
 
 time main;
-
